@@ -32,6 +32,38 @@
         </a-form-item>
       </a-form>
     </a-card>
+
+    <a-card title="安全配置" style="margin-top: 16px;">
+      <a-form :model="securityConfig" layout="vertical">
+        <a-form-item label="开放注册">
+          <a-switch v-model:checked="securityConfig.allow_registration" />
+          <span style="margin-left: 8px; color: #999;">允许未登录用户自行注册账号</span>
+        </a-form-item>
+        <a-form-item label="登录速率限制 - 最大尝试次数">
+          <a-input-number v-model:value="securityConfig.login_rate_limit_max" :min="1" :max="50" />
+          <span style="margin-left: 8px; color: #999;">同一 IP 在限制窗口内允许的登录次数</span>
+        </a-form-item>
+        <a-form-item label="登录速率限制 - 时间窗口（秒）">
+          <a-input-number v-model:value="securityConfig.login_rate_limit_window" :min="60" :max="3600" :step="60" />
+          <span style="margin-left: 8px; color: #999;">速率限制的统计时间窗口</span>
+        </a-form-item>
+        <a-form-item>
+          <a-button type="primary" @click="updateSecurityConfig">保存</a-button>
+        </a-form-item>
+      </a-form>
+    </a-card>
+
+    <a-card title="上传配置" style="margin-top: 16px;">
+      <a-form :model="uploadConfig" layout="vertical">
+        <a-form-item label="最大上传大小 (GB)">
+          <a-input-number v-model:value="uploadConfig.max_upload_size_gb" :min="1" :max="10" :step="1" :precision="1" />
+          <span style="margin-left: 8px; color: #999;">允许上传的单个文件最大大小</span>
+        </a-form-item>
+        <a-form-item>
+          <a-button type="primary" @click="updateUploadConfig">保存</a-button>
+        </a-form-item>
+      </a-form>
+    </a-card>
   </div>
 </template>
 
@@ -49,6 +81,16 @@ const aiConfig = ref({
   ai_base_url: '',
   ai_api_key: '',
   ai_auto_review_enabled: false
+})
+
+const securityConfig = ref({
+  allow_registration: false,
+  login_rate_limit_max: 5,
+  login_rate_limit_window: 300
+})
+
+const uploadConfig = ref({
+  max_upload_size_gb: 3
 })
 
 const loadConfigs = async () => {
@@ -73,6 +115,19 @@ const loadConfigs = async () => {
     
     const aiAutoReview = configs.find(c => c.key === 'ai_auto_review_enabled')
     if (aiAutoReview) aiConfig.value.ai_auto_review_enabled = aiAutoReview.value.toLowerCase() === 'true'
+
+    // 加载安全配置
+    const allowRegistration = configs.find(c => c.key === 'allow_registration')
+    if (allowRegistration) securityConfig.value.allow_registration = allowRegistration.value.toLowerCase() === 'true'
+
+    const rateLimitMax = configs.find(c => c.key === 'login_rate_limit_max')
+    if (rateLimitMax) securityConfig.value.login_rate_limit_max = parseInt(rateLimitMax.value) || 5
+
+    const rateLimitWindow = configs.find(c => c.key === 'login_rate_limit_window')
+    if (rateLimitWindow) securityConfig.value.login_rate_limit_window = parseInt(rateLimitWindow.value) || 300
+
+    const maxUploadSize = configs.find(c => c.key === 'max_upload_size')
+    if (maxUploadSize) uploadConfig.value.max_upload_size_gb = parseInt(maxUploadSize.value) / (1024 * 1024 * 1024)
   } catch (error) {
     message.error('加载配置失败')
   }
@@ -177,6 +232,46 @@ const updateAIConfig = async () => {
     message.success('AI配置更新成功')
   } catch (error) {
     message.error('AI配置更新失败')
+  }
+}
+
+const updateSecurityConfig = async () => {
+  try {
+    const securityItems = [
+      { key: 'allow_registration', value: securityConfig.value.allow_registration.toString(), desc: '是否允许开放注册' },
+      { key: 'login_rate_limit_max', value: securityConfig.value.login_rate_limit_max.toString(), desc: '登录速率限制最大尝试次数' },
+      { key: 'login_rate_limit_window', value: securityConfig.value.login_rate_limit_window.toString(), desc: '登录速率限制时间窗口（秒）' }
+    ]
+    for (const item of securityItems) {
+      try {
+        await configApi.get(item.key)
+        await configApi.update(item.key, { value: item.value, description: item.desc })
+      } catch (error) {
+        if (error.response?.status === 404) {
+          await configApi.create({ key: item.key, value: item.value, description: item.desc })
+        }
+      }
+    }
+    message.success('安全配置更新成功')
+  } catch (error) {
+    message.error('安全配置更新失败')
+  }
+}
+
+const updateUploadConfig = async () => {
+  try {
+    const valueBytes = Math.round(uploadConfig.value.max_upload_size_gb * 1024 * 1024 * 1024)
+    try {
+      await configApi.get('max_upload_size')
+      await configApi.update('max_upload_size', { value: valueBytes.toString(), description: '最大上传文件大小（字节）' })
+    } catch (error) {
+      if (error.response?.status === 404) {
+        await configApi.create({ key: 'max_upload_size', value: valueBytes.toString(), description: '最大上传文件大小（字节）' })
+      }
+    }
+    message.success('上传配置更新成功')
+  } catch (error) {
+    message.error('上传配置更新失败')
   }
 }
 

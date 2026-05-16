@@ -8,7 +8,8 @@ from pathlib import Path
 
 from ..core.database import get_db
 from ..core.deps import get_current_active_user, require_ops
-from ..core.config import settings
+from ..core.config import settings, get_max_upload_size
+from ..core.validators import sanitize_filename, validate_path_within_dir, ALLOWED_UPLOAD_EXTENSIONS
 from ..models.user import User
 from ..models.software import Software, SoftwareVersion
 from ..models.vulnerability import Vulnerability
@@ -36,6 +37,7 @@ async def list_software(
     limit: int = Query(20, ge=1, le=1000),
     category: Optional[str] = None,
     search: Optional[str] = None,
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """获取软件列表"""
@@ -80,7 +82,7 @@ async def list_software(
 
 # Specific routes must be defined before parameterized routes
 @router.get("/categories", response_model=List[str])
-async def get_categories(db: Session = Depends(get_db)):
+async def get_categories(current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     """获取软件分类列表"""
     categories = db.query(Software.category)\
         .filter(Software.category.isnot(None))\
@@ -90,7 +92,7 @@ async def get_categories(db: Session = Depends(get_db)):
 
 
 @router.get("/{software_id}", response_model=SoftwareResponse)
-async def get_software(software_id: int, db: Session = Depends(get_db)):
+async def get_software(software_id: int, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     """获取软件详情"""
     software = db.query(Software).filter(Software.id == software_id).first()
     if not software:
@@ -264,7 +266,12 @@ async def delete_software(
         raise HTTPException(status_code=404, detail="软件不存在")
 
     # 删除所有版本文件
+    from ..models.download import DownloadLog
     versions = db.query(SoftwareVersion).filter(SoftwareVersion.software_id == software_id).all()
+    # 先删除关联的下载日志
+    if versions:
+        version_ids = [v.id for v in versions]
+        db.query(DownloadLog).filter(DownloadLog.software_version_id.in_(version_ids)).delete(synchronize_session='fetch')
     for version in versions:
         if os.path.exists(version.file_path):
             os.remove(version.file_path)
@@ -290,33 +297,43 @@ async def upload_version(
     if not software:
         raise HTTPException(status_code=404, detail="软件不存在")
 
-    # 检查文件扩展名 - 现在允许所有文件类型
-    # 之前的限制: if file_ext not in settings.ALLOWED_EXTENSIONS:
-    # 现在我们移除这个限制，允许所有文件类型
+    # 检查文件扩展名
+    file_ext = os.path.splitext(file.filename)[1].lower() if file.filename else ''
+    if file_ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型: {file_ext}，允许的类型: {', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}"
+        )
 
-    # 检查文件大小
-    content = await file.read()
-    file_size = len(content)
-    if file_size > settings.MAX_UPLOAD_SIZE:
-        raise HTTPException(status_code=400, detail="文件大小超过限制")
-
-    # 保存文件
+    # 流式写入文件，避免一次性加载大文件到内存
+    safe_filename = sanitize_filename(file.filename)
     software_dir = os.path.join(settings.STORAGE_PATH, str(software_id))
     os.makedirs(software_dir, exist_ok=True)
+    file_path = validate_path_within_dir(os.path.join(software_dir, safe_filename), settings.STORAGE_PATH)
 
-    file_path = os.path.join(software_dir, file.filename)
+    file_size = 0
+    sha256_hash = hashlib.sha256()
+    chunk_size = 1024 * 1024  # 1MB chunks
     async with aiofiles.open(file_path, "wb") as f:
-        await f.write(content)
-
-    # 计算文件哈希
-    file_hash = get_file_hash(file_path)
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            file_size += len(chunk)
+            if file_size > get_max_upload_size(db):
+                await f.close()
+                os.remove(file_path)
+                raise HTTPException(status_code=400, detail="文件大小超过限制")
+            sha256_hash.update(chunk)
+            await f.write(chunk)
+    file_hash = sha256_hash.hexdigest()
 
     # 创建版本记录
     software_version = SoftwareVersion(
         software_id=software_id,
         version=version,
         file_path=file_path,
-        file_name=file.filename,
+        file_name=safe_filename,
         file_size=file_size,
         file_hash=file_hash,
         uploader_id=current_user.id,
@@ -402,6 +419,7 @@ async def upload_logo(
 async def get_logo_file(
     software_id: int,
     filename: str,
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """获取logo文件"""
@@ -411,7 +429,9 @@ async def get_logo_file(
     if not software:
         raise HTTPException(status_code=404, detail="软件不存在")
 
-    file_path = os.path.join(settings.STORAGE_PATH, "logos", filename)
+    safe_name = sanitize_filename(filename)
+    logo_dir = os.path.join(settings.STORAGE_PATH, "logos")
+    file_path = validate_path_within_dir(os.path.join(logo_dir, safe_name), logo_dir)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Logo文件不存在")
 
@@ -419,11 +439,13 @@ async def get_logo_file(
 
 
 @router.get("/logos/{filename}")
-async def get_logo_file_direct(filename: str):
+async def get_logo_file_direct(filename: str, current_user: User = Depends(get_current_active_user)):
     """直接获取logo文件（不需要 software_id）"""
     from fastapi.responses import FileResponse
 
-    file_path = os.path.join(settings.STORAGE_PATH, "logos", filename)
+    safe_name = sanitize_filename(filename)
+    logo_dir = os.path.join(settings.STORAGE_PATH, "logos")
+    file_path = validate_path_within_dir(os.path.join(logo_dir, safe_name), logo_dir)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Logo文件不存在")
 
@@ -451,6 +473,10 @@ async def delete_software_version(
 
     if not version:
         raise HTTPException(status_code=404, detail="版本不存在")
+
+    # 先删除关联的下载日志
+    from ..models.download import DownloadLog
+    db.query(DownloadLog).filter(DownloadLog.software_version_id == version_id).delete()
 
     # 删除文件
     if os.path.exists(version.file_path):

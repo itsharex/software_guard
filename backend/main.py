@@ -3,7 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
+from pathlib import Path
+from datetime import datetime
 import os
+import shutil
 
 from app.core.config import settings
 from app.core.database import engine, Base
@@ -18,6 +21,7 @@ from app.api import (
 )
 from app.api.stats import router as stats_router
 from app.api.config import router as config_router
+from app.api.upload import router as upload_router
 
 
 @asynccontextmanager
@@ -26,13 +30,37 @@ async def lifespan(app: FastAPI):
     # 启动时创建数据库表
     Base.metadata.create_all(bind=engine)
 
+    # 自动迁移：为已有表补充新字段
+    from sqlalchemy import text, inspect
+    with engine.connect() as conn:
+        inspector = inspect(engine)
+        if 'users' in inspector.get_table_names():
+            columns = [c['name'] for c in inspector.get_columns('users')]
+            if 'token_version' not in columns:
+                conn.execute(text('ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0'))
+                conn.commit()
+
     # 创建初始管理员账号（如果不存在）
     from app.core.database import SessionLocal
     from app.models.user import User, UserRole
     from app.core.security import get_password_hash
+    from datetime import timedelta
+    import shutil
 
     db = SessionLocal()
     try:
+        # 清理 24 小时前的未完成上传会话
+        from app.models.upload import UploadSession
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+        stale = db.query(UploadSession).filter(
+            UploadSession.status.in_(["pending", "uploading"]),
+            UploadSession.created_at < cutoff
+        ).all()
+        for s in stale:
+            shutil.rmtree(s.temp_dir, ignore_errors=True)
+            s.status = "cancelled"
+        if stale:
+            db.commit()
         admin = db.query(User).filter(User.username == settings.FIRST_ADMIN_USERNAME).first()
         if not admin:
             admin = User(
@@ -63,9 +91,10 @@ app = FastAPI(
 )
 
 # CORS 配置
+origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有来源（开发环境）
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,6 +109,7 @@ app.include_router(vulnerability_router, prefix="/api")
 app.include_router(user_router, prefix="/api")
 app.include_router(stats_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
+app.include_router(upload_router, prefix="/api")
 app.include_router(category_router, prefix="/api")
 
 
@@ -98,9 +128,12 @@ if os.path.isdir(STATIC_DIR):
 
     @app.get("/{full_path:path}")
     async def serve_frontend(request: Request, full_path: str):
-        file_path = os.path.join(STATIC_DIR, full_path)
-        if os.path.isfile(file_path):
-            return FileResponse(file_path)
+        file_path = (Path(STATIC_DIR) / full_path).resolve()
+        static_resolved = Path(STATIC_DIR).resolve()
+        if not str(file_path).startswith(str(static_resolved) + os.sep) and file_path != static_resolved:
+            return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+        if file_path.is_file():
+            return FileResponse(str(file_path))
         return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 else:
     @app.get("/")

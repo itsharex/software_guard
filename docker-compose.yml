@@ -36,6 +36,7 @@ services:
       FIRST_ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请在 .env.docker 中设置 ADMIN_PASSWORD}
       FIRST_ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@company.com}
       STORAGE_PATH: storage
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
       DEBUG: "false"
     volumes:
       - app-storage:/app/storage

@@ -130,25 +130,33 @@
       title="上传新版本"
       @ok="handleUploadVersion"
       :confirm-loading="uploadLoading"
+      :ok-button-props="{ disabled: uploading }"
+      :maskClosable="false"
+      :keyboard="false"
     >
       <a-form :model="versionForm" layout="vertical">
         <a-form-item label="版本号" required>
-          <a-input v-model:value="versionForm.version" placeholder="如: 1.0.0" />
+          <a-input v-model:value="versionForm.version" placeholder="如: 1.0.0" :disabled="uploading" />
         </a-form-item>
         <a-form-item label="文件" required>
           <a-upload
             :before-upload="beforeUpload"
             :file-list="fileList"
             @remove="() => fileList = []"
+            :disabled="uploading"
           >
-            <a-button>
+            <a-button :disabled="uploading">
               <UploadOutlined /> 选择文件
             </a-button>
           </a-upload>
         </a-form-item>
         <a-form-item label="更新说明">
-          <a-textarea v-model:value="versionForm.release_notes" :rows="3" />
+          <a-textarea v-model:value="versionForm.release_notes" :rows="3" :disabled="uploading" />
         </a-form-item>
+        <div v-if="uploadProgress > 0" style="margin-top: 16px;">
+          <a-progress :percent="uploadProgress" :status="uploadStatus" />
+          <p style="margin-top: 8px; color: #999; font-size: 12px;">{{ uploadDetailText }}</p>
+        </div>
       </a-form>
     </a-modal>
 
@@ -243,6 +251,7 @@ import {
   LinkOutlined
 } from '@ant-design/icons-vue'
 import { softwareApi } from '@/api/software'
+import { uploadApi } from '@/api/upload'
 import { vulnerabilityApi } from '@/api/vulnerability'
 import { categoryApi } from '@/api/category'
 import { useUserStore } from '@/stores/user'
@@ -256,6 +265,11 @@ const loading = ref(true)
 const software = ref(null)
 const showVersionModal = ref(false)
 const uploadLoading = ref(false)
+const uploading = ref(false)
+const uploadProgress = ref(0)
+const uploadStatus = ref('active')
+const uploadDetailText = ref('')
+let activeSessionId = null
 const versionForm = ref({
   version: '',
   release_notes: ''
@@ -403,29 +417,108 @@ const openEditModal = () => {
   showEditModal.value = true
 }
 
+const computeFileHash = async (file) => {
+  const buffer = await file.arrayBuffer()
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
+  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+const resetUploadForm = () => {
+  versionForm.value = { version: '', release_notes: '' }
+  fileList.value = []
+  uploadProgress.value = 0
+  uploadStatus.value = 'active'
+  uploadDetailText.value = ''
+  activeSessionId = null
+}
+
 const handleUploadVersion = async () => {
   if (!versionForm.value.version || fileList.value.length === 0) {
     message.error('请填写版本号并选择文件')
     return
   }
 
-  uploadLoading.value = true
-  try {
-    const formData = new FormData()
-    formData.append('version', versionForm.value.version)
-    formData.append('file', fileList.value[0])
-    formData.append('release_notes', versionForm.value.release_notes || '')
+  const file = fileList.value[0]
+  const CHUNK_THRESHOLD = 50 * 1024 * 1024
 
-    await softwareApi.uploadVersion(route.params.id, formData)
+  if (file.size < CHUNK_THRESHOLD) {
+    uploadLoading.value = true
+    try {
+      const formData = new FormData()
+      formData.append('version', versionForm.value.version)
+      formData.append('file', file)
+      formData.append('release_notes', versionForm.value.release_notes || '')
+      await softwareApi.uploadVersion(route.params.id, formData)
+      message.success('上传成功')
+      showVersionModal.value = false
+      resetUploadForm()
+      loadDetail()
+    } catch (error) {
+      message.error('上传失败')
+    } finally {
+      uploadLoading.value = false
+    }
+  } else {
+    await handleChunkedUpload(file)
+  }
+}
+
+const handleChunkedUpload = async (file) => {
+  uploading.value = true
+  uploadProgress.value = 1
+  uploadStatus.value = 'active'
+  activeSessionId = null
+
+  const CHUNK_SIZE = uploadApi.CHUNK_SIZE
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+
+  try {
+    uploadDetailText.value = '正在计算文件校验值...'
+    const fileHash = await computeFileHash(file)
+
+    uploadDetailText.value = '正在初始化上传...'
+    const initResult = await uploadApi.init({
+      software_id: parseInt(route.params.id),
+      file_name: file.name,
+      file_size: file.size,
+      file_hash: fileHash,
+      total_chunks: totalChunks,
+      chunk_size: CHUNK_SIZE,
+      version: versionForm.value.version,
+      release_notes: versionForm.value.release_notes || ''
+    })
+    activeSessionId = initResult.session_id
+
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE
+      const end = Math.min(start + CHUNK_SIZE, file.size)
+      const chunk = file.slice(start, end)
+      uploadDetailText.value = `正在上传分片 ${i + 1} / ${totalChunks}`
+
+      await uploadApi.uploadChunk(activeSessionId, i, chunk, (e) => {
+        const chunkPct = e.loaded / e.total
+        uploadProgress.value = Math.round(((i + chunkPct) / totalChunks) * 100)
+      })
+      uploadProgress.value = Math.round(((i + 1) / totalChunks) * 100)
+    }
+
+    uploadDetailText.value = '正在合并文件...'
+    uploadProgress.value = 100
+
+    await uploadApi.complete(activeSessionId)
+    uploadStatus.value = 'success'
     message.success('上传成功')
     showVersionModal.value = false
-    versionForm.value = { version: '', release_notes: '' }
-    fileList.value = []
+    resetUploadForm()
     loadDetail()
   } catch (error) {
-    message.error('上传失败')
+    uploadStatus.value = 'exception'
+    message.error('上传失败: ' + (error.response?.data?.detail || '未知错误'))
+    if (activeSessionId) {
+      try { await uploadApi.cancel(activeSessionId) } catch {}
+    }
   } finally {
-    uploadLoading.value = false
+    uploading.value = false
   }
 }
 

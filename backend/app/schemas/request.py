@@ -22,6 +22,12 @@ class SoftwareRequestBase(BaseModel):
     logo: Optional[str] = None
     official_url: Optional[str] = None
 
+    @field_validator('download_url', mode='before')
+    @classmethod
+    def validate_download_url(cls, v):
+        from ..core.validators import validate_download_url
+        return validate_download_url(v)
+
     @field_validator('logo', 'official_url', mode='before')
     @classmethod
     def validate_url(cls, v):

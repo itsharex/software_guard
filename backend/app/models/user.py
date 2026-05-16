@@ -24,6 +24,7 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_login = Column(DateTime(timezone=True))
+    token_version = Column(Integer, default=0)  # 递增使旧 token 失效
 
     # 关系
     uploaded_software = relationship("Software", back_populates="creator")

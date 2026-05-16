@@ -79,6 +79,8 @@ async def update_user(
 
     user.role = user_data.role
     user.is_active = user_data.is_active
+    # 递增 token_version 使旧 token 失效
+    user.token_version = (user.token_version or 0) + 1
     db.commit()
     db.refresh(user)
 

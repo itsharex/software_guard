@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from ..core.database import get_db
-from ..core.deps import require_ops
+from ..core.deps import require_ops, get_current_active_user
 from ..models.user import User
 from ..models.category import SoftwareCategory
 from ..models.software import Software
@@ -21,6 +21,7 @@ router = APIRouter(prefix="/categories", tags=["软件类型管理"])
 async def list_categories(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """获取软件类型列表"""
@@ -46,7 +47,7 @@ async def list_categories(
 
 
 @router.get("/all", response_model=List[str])
-async def get_all_category_names(db: Session = Depends(get_db)):
+async def get_all_category_names(current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     """获取所有软件类型名称（用于下拉列表）"""
     categories = db.query(SoftwareCategory)\
         .order_by(SoftwareCategory.sort_order.asc(), SoftwareCategory.id.asc())\
@@ -57,6 +58,7 @@ async def get_all_category_names(db: Session = Depends(get_db)):
 @router.get("/{category_id}", response_model=CategoryResponse)
 async def get_category(
     category_id: int,
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """获取软件类型详情"""

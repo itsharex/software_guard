@@ -8,6 +8,7 @@ from ..core.security import decode_access_token
 from ..models.user import User, UserRole
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
 async def get_current_user(
@@ -26,13 +27,17 @@ async def get_current_user(
 
     username: str = payload.get("sub")
     user_id: int = payload.get("user_id")
-    role: str = payload.get("role")
+    token_version: int = payload.get("tv", 0)
 
     if username is None or user_id is None:
         raise credentials_exception
 
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
+        raise credentials_exception
+
+    # token_version 不匹配说明用户角色/状态已变更，旧 token 应失效
+    if user.token_version != token_version:
         raise credentials_exception
 
     return user
@@ -45,6 +50,27 @@ async def get_current_active_user(
     if not current_user.is_active:
         raise HTTPException(status_code=400, detail="用户已被禁用")
     return current_user
+
+
+async def get_optional_current_user(
+    token: Optional[str] = Depends(oauth2_scheme_optional),
+    db: Session = Depends(get_db)
+) -> Optional[User]:
+    """获取当前用户（可选，未登录时返回 None）"""
+    if not token:
+        return None
+    try:
+        payload = decode_access_token(token)
+        if payload is None:
+            return None
+        username: str = payload.get("sub")
+        user_id: int = payload.get("user_id")
+        if username is None or user_id is None:
+            return None
+        user = db.query(User).filter(User.id == user_id).first()
+        return user if user and user.is_active else None
+    except Exception:
+        return None
 
 
 def require_role(*allowed_roles: UserRole):

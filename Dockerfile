@@ -5,7 +5,9 @@ FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
-RUN npm install -g pnpm@latest
+RUN npm install -g pnpm@9
+
+RUN pnpm config set registry https://registry.npmmirror.com
 
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 

@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List
-import httpx
 import os
 import aiofiles
 import hashlib
@@ -10,6 +9,7 @@ from pathlib import Path
 from ..core.database import get_db
 from ..core.deps import get_current_active_user, require_ops
 from ..core.config import settings
+from ..core.validators import validate_download_url, sanitize_filename, validate_path_within_dir, safe_httpx_client
 from ..models.user import User
 from ..models.request import SoftwareRequest, RequestStatus
 from ..models.software import Software, SoftwareVersion
@@ -22,13 +22,17 @@ router = APIRouter(prefix="/requests", tags=["软件申请"])
 async def download_software_from_url(url: str, software_id: int, version: str, uploader_id: int):
     """后台任务：从 URL 下载软件"""
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        # Validate URL to prevent SSRF
+        validate_download_url(url)
+
+        async with safe_httpx_client(timeout=300.0) as client:
             response = await client.get(url)
             response.raise_for_status()
             content = response.content
 
-        # 从 URL 提取文件名
-        filename = Path(url).name or f"software_{software_id}"
+        # 从 URL 提取文件名并净化
+        raw_name = Path(url).name or f"software_{software_id}"
+        filename = sanitize_filename(raw_name)
         if '.' not in filename:
             filename += ".exe"
 
@@ -41,6 +45,9 @@ async def download_software_from_url(url: str, software_id: int, version: str, u
         software_dir = os.path.join(settings.STORAGE_PATH, str(software_id))
         os.makedirs(software_dir, exist_ok=True)
         file_path = os.path.join(software_dir, filename)
+
+        # 验证路径在存储目录内
+        validate_path_within_dir(file_path, settings.STORAGE_PATH)
 
         async with aiofiles.open(file_path, "wb") as f:
             await f.write(content)
@@ -169,13 +176,17 @@ async def auto_review_request(request_id: int, db_session: Session):
                 
                 async def download_task():
                     try:
-                        async with httpx.AsyncClient(timeout=300.0) as client:
+                        from ..core.validators import validate_download_url, sanitize_filename, validate_path_within_dir, safe_httpx_client
+                        validate_download_url(software_request.download_url)
+
+                        async with safe_httpx_client(timeout=300.0) as client:
                             response = await client.get(software_request.download_url)
                             response.raise_for_status()
                             content = response.content
 
-                        # 从 URL 提取文件名
-                        filename = Path(software_request.download_url).name or f"software_{existing_software.id}"
+                        # 从 URL 提取文件名并净化
+                        raw_name = Path(software_request.download_url).name or f"software_{existing_software.id}"
+                        filename = sanitize_filename(raw_name)
                         if '.' not in filename:
                             filename += ".exe"
 
@@ -188,6 +199,7 @@ async def auto_review_request(request_id: int, db_session: Session):
                         software_dir = os.path.join(settings.STORAGE_PATH, str(existing_software.id))
                         os.makedirs(software_dir, exist_ok=True)
                         file_path = os.path.join(software_dir, filename)
+                        validate_path_within_dir(file_path, settings.STORAGE_PATH)
 
                         async with aiofiles.open(file_path, "wb") as f:
                             await f.write(content)
@@ -235,13 +247,17 @@ async def auto_review_request(request_id: int, db_session: Session):
                 
                 async def download_task():
                     try:
-                        async with httpx.AsyncClient(timeout=300.0) as client:
+                        from ..core.validators import validate_download_url, sanitize_filename, validate_path_within_dir, safe_httpx_client
+                        validate_download_url(software_request.download_url)
+
+                        async with safe_httpx_client(timeout=300.0) as client:
                             response = await client.get(software_request.download_url)
                             response.raise_for_status()
                             content = response.content
 
-                        # 从 URL 提取文件名
-                        filename = Path(software_request.download_url).name or f"software_{software.id}"
+                        # 从 URL 提取文件名并净化
+                        raw_name = Path(software_request.download_url).name or f"software_{software.id}"
+                        filename = sanitize_filename(raw_name)
                         if '.' not in filename:
                             filename += ".exe"
 
@@ -254,6 +270,7 @@ async def auto_review_request(request_id: int, db_session: Session):
                         software_dir = os.path.join(settings.STORAGE_PATH, str(software.id))
                         os.makedirs(software_dir, exist_ok=True)
                         file_path = os.path.join(software_dir, filename)
+                        validate_path_within_dir(file_path, settings.STORAGE_PATH)
 
                         async with aiofiles.open(file_path, "wb") as f:
                             await f.write(content)

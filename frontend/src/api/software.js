@@ -27,8 +27,11 @@ export const softwareApi = {
   },
 
   // 上传软件版本
-  uploadVersion(softwareId, data) {
-    return api.post(`/software/${softwareId}/versions`, data)
+  uploadVersion(softwareId, data, onUploadProgress) {
+    return api.post(`/software/${softwareId}/versions`, data, {
+      timeout: 0,
+      onUploadProgress
+    })
   },
 
   // 删除软件版本
