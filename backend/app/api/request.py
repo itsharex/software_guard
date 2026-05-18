@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..core.database import get_db
 from ..core.deps import get_current_active_user, require_ops
-from ..core.config import settings
+from ..core.config import settings, get_storage_path
 from ..core.validators import validate_download_url, sanitize_filename, validate_path_within_dir, safe_httpx_client
 from ..models.user import User
 from ..models.request import SoftwareRequest, RequestStatus
@@ -41,20 +41,22 @@ async def download_software_from_url(url: str, software_id: int, version: str, u
         sha256_hash.update(content)
         file_hash = sha256_hash.hexdigest()
 
+        # 获取存储路径
+        from ..core.database import SessionLocal
+        db = SessionLocal()
+        storage_path = get_storage_path(db)
+
         # 保存文件
-        software_dir = os.path.join(settings.STORAGE_PATH, str(software_id))
+        software_dir = os.path.join(storage_path, str(software_id))
         os.makedirs(software_dir, exist_ok=True)
         file_path = os.path.join(software_dir, filename)
 
         # 验证路径在存储目录内
-        validate_path_within_dir(file_path, settings.STORAGE_PATH)
+        validate_path_within_dir(file_path, storage_path)
 
         async with aiofiles.open(file_path, "wb") as f:
             await f.write(content)
 
-        # 获取数据库会话
-        from ..core.database import SessionLocal
-        db = SessionLocal()
         try:
             # 创建版本记录
             software_version = SoftwareVersion(
@@ -173,7 +175,7 @@ async def auto_review_request(request_id: int, db_session: Session):
                 import aiofiles
                 import hashlib
                 from pathlib import Path
-                
+
                 async def download_task():
                     try:
                         from ..core.validators import validate_download_url, sanitize_filename, validate_path_within_dir, safe_httpx_client
@@ -196,10 +198,11 @@ async def auto_review_request(request_id: int, db_session: Session):
                         file_hash = sha256_hash.hexdigest()
 
                         # 保存文件
-                        software_dir = os.path.join(settings.STORAGE_PATH, str(existing_software.id))
+                        sp = get_storage_path(db)
+                        software_dir = os.path.join(sp, str(existing_software.id))
                         os.makedirs(software_dir, exist_ok=True)
                         file_path = os.path.join(software_dir, filename)
-                        validate_path_within_dir(file_path, settings.STORAGE_PATH)
+                        validate_path_within_dir(file_path, sp)
 
                         async with aiofiles.open(file_path, "wb") as f:
                             await f.write(content)
@@ -244,7 +247,7 @@ async def auto_review_request(request_id: int, db_session: Session):
                 import aiofiles
                 import hashlib
                 from pathlib import Path
-                
+
                 async def download_task():
                     try:
                         from ..core.validators import validate_download_url, sanitize_filename, validate_path_within_dir, safe_httpx_client
@@ -267,10 +270,11 @@ async def auto_review_request(request_id: int, db_session: Session):
                         file_hash = sha256_hash.hexdigest()
 
                         # 保存文件
-                        software_dir = os.path.join(settings.STORAGE_PATH, str(software.id))
+                        sp = get_storage_path(db)
+                        software_dir = os.path.join(sp, str(software.id))
                         os.makedirs(software_dir, exist_ok=True)
                         file_path = os.path.join(software_dir, filename)
-                        validate_path_within_dir(file_path, settings.STORAGE_PATH)
+                        validate_path_within_dir(file_path, sp)
 
                         async with aiofiles.open(file_path, "wb") as f:
                             await f.write(content)

@@ -21,10 +21,31 @@
     <a-card title="存储配置" style="margin-top: 16px;">
       <a-form :model="storageConfig" layout="vertical">
         <a-form-item label="存储目录">
-          <a-input v-model:value="storageConfig.storage_path" placeholder="请输入存储目录路径" />
+          <a-input v-model:value="storageConfig.storage_path" placeholder="请输入存储目录路径，留空则使用默认路径" :disabled="storageStatus?.is_docker" />
+          <span v-if="storageStatus?.is_docker" style="color: #999; font-size: 12px;">Docker 容器环境不支持在页面修改存储目录，请通过配置文件调整</span>
+          <span v-else style="color: #999; font-size: 12px;">修改后需要确保新目录存在且可写，已有文件不会自动迁移</span>
         </a-form-item>
-        <a-form-item>
-          <a-button type="primary" @click="updateStorageConfig">保存</a-button>
+        <a-form-item v-if="storageStatus">
+          <a-descriptions :column="1" size="small" bordered>
+            <a-descriptions-item label="当前生效路径">{{ storageStatus.current_path }}</a-descriptions-item>
+            <a-descriptions-item label="路径状态">
+              <a-tag v-if="storageStatus.exists && storageStatus.writable" color="green">正常（可读写）</a-tag>
+              <a-tag v-else-if="storageStatus.exists && !storageStatus.writable" color="red">路径不可写</a-tag>
+              <a-tag v-else color="orange">路径不存在（保存后将自动创建）</a-tag>
+            </a-descriptions-item>
+          </a-descriptions>
+          <a-alert style="margin-top: 12px;" type="info" show-icon>
+            <template #message>
+              <span v-if="storageStatus.is_docker">当前运行在 Docker 容器中，路径为容器内部路径。如需使用网络共享存储（如 SMB/NFS），请在宿主机挂载后通过 <code>docker-compose.yml</code> 的 <code>volumes</code> 映射进容器。</span>
+              <span v-else>修改存储目录后立即生效，如需使用网络共享存储请先在系统中挂载（如 NFS: <code>mount -t nfs</code>，SMB: <code>mount -t cifs</code>）。</span>
+            </template>
+          </a-alert>
+        </a-form-item>
+        <a-form-item v-if="!storageStatus?.is_docker">
+          <a-space>
+            <a-button type="primary" @click="updateStorageConfig">保存</a-button>
+            <a-button @click="loadStorageStatus">检查状态</a-button>
+          </a-space>
         </a-form-item>
       </a-form>
     </a-card>
@@ -168,6 +189,21 @@ const ldapConfig = ref({
 
 const ldapTesting = ref(false)
 
+const storageStatus = ref(null)
+
+const loadStorageStatus = async () => {
+  try {
+    const res = await fetch('/api/configs/storage/status', {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+    })
+    if (res.ok) {
+      storageStatus.value = await res.json()
+    }
+  } catch {
+    // ignore
+  }
+}
+
 const loadConfigs = async () => {
   try {
     const configs = await configApi.list()
@@ -273,6 +309,7 @@ const updateStorageConfig = async () => {
       }
     }
     message.success('存储配置更新成功')
+    loadStorageStatus()
   } catch (error) {
     message.error('存储配置更新失败')
   }
@@ -447,6 +484,7 @@ const testLdapConnection = async () => {
 
 onMounted(() => {
   loadConfigs()
+  loadStorageStatus()
 })
 </script>
 

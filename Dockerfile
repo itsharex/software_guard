@@ -29,6 +29,10 @@ LABEL org.opencontainers.image.source="https://github.com/your-org/software_guar
 
 WORKDIR /app
 
+# 使用国内镜像源加速
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
+
 # 仅安装运行时必需的系统依赖，不保留包管理器缓存
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

@@ -1,3 +1,4 @@
+import os
 import secrets
 import warnings
 from pydantic_settings import BaseSettings
@@ -63,3 +64,17 @@ def get_max_upload_size(db=None) -> int:
         if row:
             return int(row.value)
     return settings.MAX_UPLOAD_SIZE
+
+
+def get_storage_path(db=None) -> str:
+    """获取存储路径：优先读数据库配置，否则用环境变量，始终返回绝对路径"""
+    if db:
+        from ..models.config import Config
+        row = db.query(Config).filter(Config.key == "storage_path").first()
+        if row and row.value.strip():
+            path = os.path.abspath(row.value.strip())
+            os.makedirs(path, exist_ok=True)
+            return path
+    path = os.path.abspath(settings.STORAGE_PATH)
+    os.makedirs(path, exist_ok=True)
+    return path

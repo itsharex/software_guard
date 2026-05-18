@@ -11,7 +11,7 @@ import aiofiles
 
 from ..core.database import get_db
 from ..core.deps import require_ops
-from ..core.config import settings, get_max_upload_size
+from ..core.config import settings, get_max_upload_size, get_storage_path
 from ..core.validators import sanitize_filename, validate_path_within_dir
 from ..models.user import User
 from ..models.software import Software, SoftwareVersion
@@ -45,7 +45,8 @@ async def init_upload(
         raise HTTPException(status_code=400, detail="分片数量不匹配")
 
     session_id = uuid.uuid4().hex
-    temp_dir = os.path.join(settings.STORAGE_PATH, "uploads_temp", session_id)
+    storage_path = get_storage_path(db)
+    temp_dir = os.path.join(storage_path, "uploads_temp", session_id)
     os.makedirs(temp_dir, exist_ok=True)
 
     session = UploadSession(
@@ -135,9 +136,10 @@ async def complete_upload(
 
     # 合并分片
     safe_filename = sanitize_filename(session.file_name)
-    software_dir = os.path.join(settings.STORAGE_PATH, str(session.software_id))
+    storage_path = get_storage_path(db)
+    software_dir = os.path.join(storage_path, str(session.software_id))
     os.makedirs(software_dir, exist_ok=True)
-    final_path = validate_path_within_dir(os.path.join(software_dir, safe_filename), settings.STORAGE_PATH)
+    final_path = validate_path_within_dir(os.path.join(software_dir, safe_filename), storage_path)
 
     sha256_hash = hashlib.sha256()
     total_size = 0

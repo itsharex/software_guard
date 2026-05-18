@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..core.database import get_db
 from ..core.deps import get_current_active_user, require_ops
-from ..core.config import settings, get_max_upload_size
+from ..core.config import settings, get_max_upload_size, get_storage_path
 from ..core.validators import sanitize_filename, validate_path_within_dir, ALLOWED_UPLOAD_EXTENSIONS
 from ..models.user import User
 from ..models.software import Software, SoftwareVersion
@@ -307,9 +307,10 @@ async def upload_version(
 
     # 流式写入文件，避免一次性加载大文件到内存
     safe_filename = sanitize_filename(file.filename)
-    software_dir = os.path.join(settings.STORAGE_PATH, str(software_id))
+    storage_path = get_storage_path(db)
+    software_dir = os.path.join(storage_path, str(software_id))
     os.makedirs(software_dir, exist_ok=True)
-    file_path = validate_path_within_dir(os.path.join(software_dir, safe_filename), settings.STORAGE_PATH)
+    file_path = validate_path_within_dir(os.path.join(software_dir, safe_filename), storage_path)
 
     file_size = 0
     sha256_hash = hashlib.sha256()
@@ -383,7 +384,8 @@ async def upload_logo(
         raise HTTPException(status_code=400, detail="Logo文件大小不能超过5MB")
 
     # 创建logo目录
-    logo_dir = os.path.join(settings.STORAGE_PATH, "logos")
+    storage_path = get_storage_path(db)
+    logo_dir = os.path.join(storage_path, "logos")
     os.makedirs(logo_dir, exist_ok=True)
 
     # 生成唯一的文件名
@@ -398,7 +400,7 @@ async def upload_logo(
 
     # 删除旧的logo文件
     if software.logo and software.logo.startswith("/api/software/"):
-        old_logo_path = os.path.join(settings.STORAGE_PATH, "logos", os.path.basename(software.logo))
+        old_logo_path = os.path.join(storage_path, "logos", os.path.basename(software.logo))
         if os.path.exists(old_logo_path):
             try:
                 os.remove(old_logo_path)
@@ -430,7 +432,8 @@ async def get_logo_file(
         raise HTTPException(status_code=404, detail="软件不存在")
 
     safe_name = sanitize_filename(filename)
-    logo_dir = os.path.join(settings.STORAGE_PATH, "logos")
+    storage_path = get_storage_path(db)
+    logo_dir = os.path.join(storage_path, "logos")
     file_path = validate_path_within_dir(os.path.join(logo_dir, safe_name), logo_dir)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Logo文件不存在")
@@ -439,12 +442,13 @@ async def get_logo_file(
 
 
 @router.get("/logos/{filename}")
-async def get_logo_file_direct(filename: str, current_user: User = Depends(get_current_active_user)):
+async def get_logo_file_direct(filename: str, current_user: User = Depends(get_current_active_user), db: Session = Depends(get_db)):
     """直接获取logo文件（不需要 software_id）"""
     from fastapi.responses import FileResponse
 
     safe_name = sanitize_filename(filename)
-    logo_dir = os.path.join(settings.STORAGE_PATH, "logos")
+    storage_path = get_storage_path(db)
+    logo_dir = os.path.join(storage_path, "logos")
     file_path = validate_path_within_dir(os.path.join(logo_dir, safe_name), logo_dir)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Logo文件不存在")

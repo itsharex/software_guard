@@ -8,7 +8,7 @@ from datetime import datetime
 import os
 import shutil
 
-from app.core.config import settings
+from app.core.config import settings, get_storage_path
 from app.core.database import engine, Base, get_db
 from app.api import (
     auth_router,
@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
         db.close()
 
     # 确保存储目录存在
-    os.makedirs(settings.STORAGE_PATH, exist_ok=True)
+    os.makedirs(get_storage_path(db), exist_ok=True)
 
     yield
 
